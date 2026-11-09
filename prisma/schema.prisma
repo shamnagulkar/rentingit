@@ -1,0 +1,228 @@
+// RENTINGIT - P2P Rental Marketplace Schema (SQLite for dev, Postgres for prod)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  phone          String?
+  passwordHash   String?
+  image          String?
+  role           String   @default("USER") // USER | ADMIN
+  kycStatus      String   @default("PENDING") // PENDING | SUBMITTED | VERIFIED | REJECTED
+  kycDocType     String?  // AADHAAR | PAN | DRIVING_LICENSE
+  kycDocNumber   String?
+  trustScore     Float    @default(5.0)
+  totalRatings   Int      @default(0)
+  walletBalance  Float    @default(0)
+  city           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  itemsOwned       Item[]
+  bookingsAsRenter Booking[]     @relation("RenterBookings")
+  reviewsGiven     Review[]      @relation("ReviewerReviews")
+  reviewsReceived  Review[]      @relation("RevieweeReviews")
+  walletTxns       WalletTransaction[]
+  payments         Payment[]     @relation("UserPayments")
+  disputesRaised   Dispute[]     @relation("DisputeRaiser")
+  kycDocs          KycDocument[]
+  kycReviewed      KycDocument[] @relation("KycReviewer")
+  conversationsOwner  Conversation[] @relation("ConversationOwner")
+  conversationsRenter Conversation[] @relation("ConversationRenter")
+  messagesSent     ChatMessage[]
+}
+
+model Item {
+  id              String   @id @default(cuid())
+  ownerId         String
+  title           String
+  category        String
+  description     String
+  images          String   // JSON array of image URLs (Cloudinary)
+  dailyRent       Float
+  securityDeposit Float
+  city            String
+  area            String
+  lat             Float?
+  lng             Float?
+  isAvailable     Boolean  @default(true)
+  condition       String   @default("Good")
+  viewCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner    User      @relation(fields: [ownerId], references: [id])
+  bookings Booking[]
+
+  @@index([category])
+  @@index([city])
+  @@index([ownerId])
+}
+
+model Booking {
+  id                String   @id @default(cuid())
+  itemId            String
+  renterId          String
+  startDate         DateTime
+  endDate           DateTime
+  totalRent         Float
+  securityDeposit   Float
+  platformFee       Float
+  insurancePurchased Boolean  @default(false)
+  insuranceAmount   Float     @default(0)
+  grandTotal        Float
+  status            String   @default("REQUESTED")
+  pickupOtp         String?
+  returnOtp         String?
+  ownerApprovedAt   DateTime?
+  paidAt            DateTime?
+  pickedUpAt        DateTime?
+  returnedAt        DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  item          Item           @relation(fields: [itemId], references: [id])
+  renter        User           @relation("RenterBookings", fields: [renterId], references: [id])
+  payments      Payment[]
+  reviews       Review[]
+  disputes      Dispute[]
+  conversation  Conversation?
+
+  @@index([itemId])
+  @@index([renterId])
+  @@index([status])
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  bookingId   String
+  userId      String
+  amount      Float
+  type        String   // RENT | DEPOSIT | INSURANCE | PAYOUT | REFUND | PLATFORM_FEE
+  method      String   @default("UPI")
+  razorpayId  String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+  user    User    @relation("UserPayments", fields: [userId], references: [id])
+
+  @@index([bookingId])
+  @@index([userId])
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  bookingId  String
+  reviewerId String
+  revieweeId String
+  rating     Int
+  comment    String
+  type       String
+  createdAt  DateTime @default(now())
+
+  booking  Booking @relation(fields: [bookingId], references: [id])
+  reviewer User    @relation("ReviewerReviews", fields: [reviewerId], references: [id])
+  reviewee User    @relation("RevieweeReviews", fields: [revieweeId], references: [id])
+
+  @@index([revieweeId])
+}
+
+model WalletTransaction {
+  id           String   @id @default(cuid())
+  userId       String
+  type         String   // CREDIT | DEBIT
+  amount       Float
+  reference    String
+  description  String
+  balanceAfter Float
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Dispute {
+  id              String   @id @default(cuid())
+  bookingId       String
+  raisedById      String
+  reason          String
+  description     String
+  evidencePhotos  String   // JSON array
+  status          String   @default("OPEN")
+  resolutionNotes String?
+  decidedBy       String?
+  createdAt       DateTime @default(now())
+  resolvedAt      DateTime?
+
+  booking   Booking @relation(fields: [bookingId], references: [id])
+  raisedBy  User    @relation("DisputeRaiser", fields: [raisedById], references: [id])
+
+  @@index([bookingId])
+  @@index([status])
+}
+
+// KYC: User uploads ID + selfie photos (Cloudinary URLs), admin verifies
+model KycDocument {
+  id              String   @id @default(cuid())
+  userId          String
+  docType         String   // AADHAAR | PAN | DRIVING_LICENSE
+  docNumber       String
+  docImageUrl     String   // front of ID
+  selfieImageUrl  String   // selfie holding ID
+  status          String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  rejectionReason String?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  user      User   @relation(fields: [userId], references: [id])
+  reviewer  User?  @relation("KycReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Chat: One conversation per booking, multiple messages
+model Conversation {
+  id         String   @id @default(cuid())
+  bookingId  String   @unique
+  ownerId    String
+  renterId   String
+  itemId     String
+  createdAt  DateTime @default(now())
+
+  booking   Booking       @relation(fields: [bookingId], references: [id])
+  owner     User          @relation("ConversationOwner", fields: [ownerId], references: [id])
+  renter    User          @relation("ConversationRenter", fields: [renterId], references: [id])
+  messages  ChatMessage[]
+
+  @@index([ownerId])
+  @@index([renterId])
+}
+
+model ChatMessage {
+  id              String   @id @default(cuid())
+  conversationId  String
+  senderId        String
+  message         String
+  createdAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  sender        User          @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId])
+  @@index([senderId])
+}
